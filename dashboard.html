@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portal — 本地服务门户</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --card-bg: #161b22;
+  --card-border: #30363d;
+  --card-hover-border: #484f58;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --accent-online: #3fb950;
+  --accent-offline: #f85149;
+  --accent-warn: #d29922;
+  --toast-bg: #21262d;
+  --radius: 8px;
+  --grid-gap: 20px;
+  --max-width: 1200px;
+  --transition-fast: 150ms ease-out;
+  --font-body: system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-body); background: var(--bg); color: var(--text-primary); min-height: 100vh; }
+header {
+  padding: 24px 32px 0; max-width: var(--max-width); margin: 0 auto;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+h1 { font-family: var(--font-mono); font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+h1 .portal-mark { color: var(--accent-online); margin-right: 6px; }
+header .meta { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 12px; }
+header .logout-btn { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); text-decoration: none; padding: 4px 10px; border: 1px solid var(--card-border); border-radius: 4px; transition: border-color var(--transition-fast); }
+header .logout-btn:hover { border-color: var(--accent-offline); color: var(--accent-offline); }
+main {
+  max-width: var(--max-width); margin: 24px auto; padding: 0 32px 32px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--grid-gap);
+}
+.card {
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius);
+  padding: 20px; text-decoration: none; color: inherit; display: block;
+  transition: border-color var(--transition-fast), transform var(--transition-fast);
+}
+.card:hover { border-color: var(--card-hover-border); transform: translateY(-2px); }
+.card:focus-visible { outline: 2px solid var(--accent-online); outline-offset: 2px; }
+.card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.card-icon { font-size: 28px; line-height: 1; flex-shrink: 0; }
+.card-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
+.status-dot.online { background: var(--accent-online); box-shadow: 0 0 6px var(--accent-online); animation: pulse 2s infinite; }
+.status-dot.offline { background: var(--accent-offline); }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 4px var(--accent-online); } 50% { box-shadow: 0 0 12px var(--accent-online); } }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+.card-body { font-size: 14px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 4px; }
+.card-url { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-desc { font-size: 13px; color: var(--text-secondary); margin-top: 2px; opacity: 0.85; }
+.card-latency { font-size: 12px; }
+.card-latency.fast { color: var(--accent-online); }
+.card-latency.medium { color: var(--accent-warn); }
+.card-latency.slow { color: var(--accent-offline); }
+.card-error { font-size: 12px; color: var(--accent-offline); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-time { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); margin-top: 6px; opacity: 0.7; }
+.empty-state { grid-column: 1 / -1; text-align: center; padding: 80px 20px; color: var(--text-secondary); }
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-state h2 { font-family: var(--font-mono); font-size: 18px; color: var(--text-primary); margin-bottom: 8px; }
+.empty-state p { font-size: 14px; margin-bottom: 4px; }
+.empty-state code { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 4px; padding: 2px 6px; font-family: var(--font-mono); font-size: 12px; }
+.skeleton { background: linear-gradient(90deg, var(--card-bg) 25%, #21262d 50%, var(--card-bg) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: var(--radius); }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.skeleton-card { height: 130px; }
+.cat-title { grid-column: 1 / -1; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin: 8px 0 -8px; padding-top: 8px; }
+#toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { background: var(--toast-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 10px 16px; font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); animation: toastIn 0.3s ease-out; pointer-events: auto; max-width: 360px; }
+.toast.removing { animation: toastOut 0.25s ease-in forwards; }
+.toast .toast-icon { font-size: 16px; flex-shrink: 0; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes toastOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(20px); } }
+@media (max-width: 640px) {
+  header, main { padding-left: 16px; padding-right: 16px; }
+  main { grid-template-columns: 1fr; }
+  #toast-container { left: 16px; right: 16px; }
+  .toast { max-width: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="portal-mark">■</span>本地服务门户</h1>
+  <div class="meta">
+    <span id="header-meta"></span>
+    <a class="logout-btn" href="/logout">退出</a>
+  </div>
+</header>
+<main id="cards"></main>
+<div id="toast-container"></div>
+<script>
+var API = '/api/services';
+var HEALTH = '/api/health';
+var firstLoad = true;
+var prevOnline = {};
+
+function latencyClass(ms) {
+  if (ms < 100) return 'fast';
+  if (ms < 500) return 'medium';
+  return 'slow';
+}
+function escapeHTML(str) {
+  if (!str) return '';
+  var d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+function renderCard(s) {
+  var cls = s.online ? 'online' : 'offline';
+  var lats = s.online ? '<span class="card-latency ' + latencyClass(s.latency_ms) + '">' + s.latency_ms + 'ms</span>' : '';
+  var err = s.error ? '<div class="card-error">' + escapeHTML(s.error) + '</div>' : '';
+  var checked = s.last_checked ? '上次检查：' + new Date(s.last_checked).toLocaleTimeString() : '';
+  var statusLabel = s.online ? '在线' : '离线';
+  var proxyUrl = '/proxy/' + s.port + '/';
+  return '<a class="card" href="' + proxyUrl + '" target="_blank" rel="noopener" aria-label="' +
+    escapeHTML(s.name) + ' — ' + statusLabel + '">' +
+    '<div class="card-header">' +
+    '<span class="card-icon" aria-hidden="true">' + escapeHTML(s.icon || '❓') + '</span>' +
+    '<span class="card-name" title="' + escapeHTML(s.name) + '">' + escapeHTML(s.name) + '</span>' +
+    '<span class="status-dot ' + cls + '" aria-hidden="true"></span>' +
+    '<span class="sr-only">' + statusLabel + '</span>' +
+    '</div>' +
+    '<div class="card-body">' +
+    '<span class="card-url">' + escapeHTML(s.url) + '</span>' +
+    (s.description ? '<div class="card-desc">' + escapeHTML(s.description) + '</div>' : '') +
+    lats + err +
+    '<div class="card-time">' + checked + '</div>' +
+    '</div></a>';
+}
+function showToast(icon, name, status) {
+  var c = document.getElementById('toast-container');
+  var el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = '<span class="toast-icon">' + icon + '</span><span>' + escapeHTML(name) + ' ' + status + '</span>';
+  c.appendChild(el);
+  setTimeout(function() { el.classList.add('removing'); setTimeout(function() { el.remove(); }, 250); }, 3000);
+}
+
+async function refresh() {
+  try {
+    var r1 = await fetch(API);
+    if (r1.status === 401) { window.location.href = '/login?reason=expired'; return; }
+    var svcData = await r1.json();
+    var services = svcData.services || [];
+
+    var r2 = await fetch(HEALTH).catch(function() { return null; });
+    if (r2) {
+      var h = await r2.json();
+      document.getElementById('header-meta').textContent = h.services_online + ' / ' + services.length + ' 在线';
+    }
+
+    if (!firstLoad) {
+      services.forEach(function(s) {
+        var prev = prevOnline[s.id];
+        if (prev !== undefined && prev !== s.online) {
+          showToast(s.icon || '❓', s.name, s.online ? '已上线' : '已离线');
+        }
+        prevOnline[s.id] = s.online;
+      });
+    } else {
+      services.forEach(function(s) { prevOnline[s.id] = s.online; });
+    }
+
+    var grid = document.getElementById('cards');
+
+    if (services.length === 0 && !firstLoad) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📭</div><h2>没有配置任何服务</h2><p>请在 <code>~/.portal/config.json</code> 的 <code>port_hints</code> 中添加端口。</p></div>';
+      return;
+    }
+    if (services.length === 0 && firstLoad) {
+      grid.innerHTML = Array.from({length: 2}, function() { return '<div class="card skeleton skeleton-card"></div>'; }).join('');
+      return;
+    }
+
+    firstLoad = false;
+
+    var groups = {}, uncat = [];
+    services.forEach(function(s) {
+      if (s.category) {
+        if (!groups[s.category]) groups[s.category] = [];
+        groups[s.category].push(s);
+      } else { uncat.push(s); }
+    });
+
+    var html = '';
+    var catLabels = {ai: '🤖 AI 服务', infra: '🖥️ 基础设施', data: '📊 数据服务', dev: '🛠 开发工具'};
+    Object.keys(groups).sort().forEach(function(cat) {
+      html += '<div class="cat-title">' + (catLabels[cat] || cat) + '</div>';
+      groups[cat].forEach(function(s) { html += renderCard(s); });
+    });
+    uncat.forEach(function(s) { html += renderCard(s); });
+    grid.innerHTML = html;
+  } catch(e) {
+    var grid = document.getElementById('cards');
+    if (grid.children.length === 0) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><h2>无法连接到 Portal</h2><p>请确认 Portal 是否在运行。</p></div>';
+    }
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
