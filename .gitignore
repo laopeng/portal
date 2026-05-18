@@ -1,6 +1,7 @@
 # Go
 portal.exe
 portal~
+portal.exe~
 *.test
 *.out
 
