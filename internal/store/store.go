@@ -40,10 +40,11 @@ type Service struct {
 // ServiceStore 是服务状态的内存存储，支持并发安全访问和 JSON 持久化。
 //
 // 使用模式:
-//   store, _ := New("/path/to/state.json")
-//   store.UpsertProbed(port, url, name, icon, desc, cat, err, online, latency)
-//   services := store.GetAll()
-//   store.CleanupZombies(7 * 24 * time.Hour)
+//
+//	store, _ := New("/path/to/state.json")
+//	store.UpsertProbed(port, url, name, icon, desc, cat, err, online, latency)
+//	services := store.GetAll()
+//	store.CleanupZombies(7 * 24 * time.Hour)
 type ServiceStore struct {
 	mu       sync.RWMutex // 保护 services 切片和 dirty 标记
 	services []Service    // 当前所有服务

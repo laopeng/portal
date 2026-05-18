@@ -62,13 +62,15 @@ func rewriteLocation(loc, prefix string) string {
 // Handler returns the main proxy handler. Nginx-style reverse proxy with dual pattern support:
 //
 // Pattern 1 — /proxy/PORT/xxx → forward to localhost:PORT/xxx
-//   This is the primary proxying mechanism (Nginx location /proxy/5000/).
-//   Browser navigation and static resources flow through this path.
+//
+//	This is the primary proxying mechanism (Nginx location /proxy/5000/).
+//	Browser navigation and static resources flow through this path.
 //
 // Pattern 2 — /api/xxx → forward to the default port (typically 5000)
-//   Browser XHR/fetch requests resolve absolute /api/xxx against the origin,
-//   not the <base> tag. This catch-all handles those SPA API calls by forwarding
-//   them to the registered default backend (Nginx location /api/).
+//
+//	Browser XHR/fetch requests resolve absolute /api/xxx against the origin,
+//	not the <base> tag. This catch-all handles those SPA API calls by forwarding
+//	them to the registered default backend (Nginx location /api/).
 //
 // Go ServeMux routes longest-prefix first, so portal's own /api/health and
 // /api/services will always be matched before this catch-all.

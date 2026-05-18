@@ -22,10 +22,10 @@ import (
 
 // PortHint 定义已知端口的服务身份信息
 type PortHint struct {
-	Name string `json:"name"`            // 服务显示名称
-	Icon string `json:"icon"`            // 服务图标（emoji）
-	Desc string `json:"desc,omitempty"`  // 服务用途描述
-	Cat  string `json:"cat,omitempty"`   // 服务分类: ai, infra, data, dev
+	Name string `json:"name"`           // 服务显示名称
+	Icon string `json:"icon"`           // 服务图标（emoji）
+	Desc string `json:"desc,omitempty"` // 服务用途描述
+	Cat  string `json:"cat,omitempty"`  // 服务分类: ai, infra, data, dev
 }
 
 // KeywordHint 定义 HTML title 关键字的服务匹配规则。
@@ -38,12 +38,12 @@ type KeywordHint struct {
 
 // Config 是 Portal 的完整配置结构
 type Config struct {
-	Port           int                  `json:"port"`            // 监听端口
-	ScanInterval   int                  `json:"scan_interval"`   // 扫描间隔（秒）
-	ProbeTimeout   int                  `json:"probe_timeout"`   // 探测超时（秒）
-	MaxConcurrency int                  `json:"max_concurrency"` // 最大并发探测数
-	PortHints      map[string]PortHint  `json:"port_hints"`      // 端口到服务映射
-	KeywordHints   []KeywordHint        `json:"keyword_hints"`   // 关键字到服务映射
+	Port           int                 `json:"port"`            // 监听端口
+	ScanInterval   int                 `json:"scan_interval"`   // 扫描间隔（秒）
+	ProbeTimeout   int                 `json:"probe_timeout"`   // 探测超时（秒）
+	MaxConcurrency int                 `json:"max_concurrency"` // 最大并发探测数
+	PortHints      map[string]PortHint `json:"port_hints"`      // 端口到服务映射
+	KeywordHints   []KeywordHint       `json:"keyword_hints"`   // 关键字到服务映射
 }
 
 // Default 返回 Portal 的默认配置。

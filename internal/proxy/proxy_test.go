@@ -149,9 +149,9 @@ func TestRewriteCSS(t *testing.T) {
 
 func TestStripProxyPrefix(t *testing.T) {
 	tests := []struct {
-		path    string
+		path     string
 		wantPort string
-		wantSub string
+		wantSub  string
 	}{
 		{"/proxy/5000/dashboard", "5000", "/dashboard"},
 		{"/proxy/5000/", "5000", "/"},

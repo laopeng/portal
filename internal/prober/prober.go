@@ -29,12 +29,12 @@ import (
 
 // Prober 是服务探测引擎，管理定时扫描和状态更新
 type Prober struct {
-	cfg      *config.Config         // 配置引用
-	store    *store.ServiceStore    // 状态存储引用
-	client   *http.Client           // 复用的 HTTP 客户端（带超时和 TLS 配置）
-	sema     chan struct{}          // 并发控制信号量
-	mu       sync.Mutex             // 保护 lastScan
-	lastScan time.Time              // 最近一次全量扫描完成时间
+	cfg      *config.Config      // 配置引用
+	store    *store.ServiceStore // 状态存储引用
+	client   *http.Client        // 复用的 HTTP 客户端（带超时和 TLS 配置）
+	sema     chan struct{}       // 并发控制信号量
+	mu       sync.Mutex          // 保护 lastScan
+	lastScan time.Time           // 最近一次全量扫描完成时间
 }
 
 // New 创建探测引擎
@@ -181,7 +181,7 @@ func extractTitle(htmlBody string) string {
 		return ""
 	}
 	title := strings.TrimSpace(matches[1])
-	title = collapseWhitespace(title) // 合并多余空白字符
+	title = collapseWhitespace(title)  // 合并多余空白字符
 	title = html.UnescapeString(title) // 解码 HTML 实体
 	if len(title) > 200 {
 		title = title[:200] + "..."
@@ -200,7 +200,7 @@ func translateError(err error) string {
 	msg := err.Error()
 	translations := map[string]string{
 		"connection refused":          "连接被拒绝",
-		"connect: connection refused":  "连接被拒绝",
+		"connect: connection refused": "连接被拒绝",
 		"i/o timeout":                 "连接超时",
 		"no such host":                "无法解析主机名",
 		"EOF":                         "连接意外关闭",
