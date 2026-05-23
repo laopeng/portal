@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -29,23 +30,25 @@ import (
 	"portal/internal/auth"
 	authstore "portal/internal/auth/store"
 	"portal/internal/proxy"
+	"portal/internal/web"
 )
 
 var (
-	version = "2.0.0"
-	started time.Time
+	version  = "2.0.0"
+	started  time.Time
+	assetsFS fs.FS
 )
-
-var dashboardPath, loginPath string
 
 func main() {
 	started = time.Now()
 
-	dashboardFlag := flag.String("dashboard", "", "自定义 Dashboard HTML 路径")
-	loginFlag := flag.String("login", "", "自定义登录页 HTML 路径")
+	dashboardFlag := flag.String("dashboard", "", "(已废弃)")
+	loginFlag := flag.String("login", "", "(已废弃)")
 	portFlag := flag.Int("port", 0, "Portal 监听端口")
 	configFlag := flag.String("config", "", "配置文件路径")
 	flag.Parse()
+	_ = dashboardFlag
+	_ = loginFlag
 
 	// CLI 子命令: ./portal user add/passwd/list/remove
 	if len(flag.Args()) > 0 && flag.Args()[0] == "user" {
@@ -53,22 +56,7 @@ func main() {
 		return
 	}
 
-	// HTML 路径
-	resolve := func(name string) string {
-		exe, _ := os.Executable()
-		if exe == "" {
-			return name
-		}
-		return filepath.Join(filepath.Dir(exe), name)
-	}
-	dashboardPath = resolve("dashboard.html")
-	loginPath = resolve("login.html")
-	if *dashboardFlag != "" {
-		dashboardPath = *dashboardFlag
-	}
-	if *loginFlag != "" {
-		loginPath = *loginFlag
-	}
+	// HTML 由 Vue 构建产物提供（embed），不再需要外部文件
 
 	// 配置
 	cfgPath := *configFlag
@@ -115,6 +103,14 @@ func main() {
 		log.Fatalf("初始化状态存储失败: %v", err)
 	}
 
+	// 清理不在配置中的旧服务
+	configuredPorts := make(map[string]bool)
+	for port := range cfg.PortHints {
+		configuredPorts[port] = true
+	}
+	serviceStore.CleanupNonConfigured(configuredPorts)
+	serviceStore.FlushIfDirty()
+
 	// 探测引擎
 	probeEngine := prober.New(cfg, serviceStore)
 	probeEngine.ProbeAll()
@@ -132,35 +128,40 @@ func main() {
 	// 路由
 	mux := http.NewServeMux()
 
-	// 无需认证
+	// 静态资源路由：Vite 构建的 /assets/ 从 embed 提供
+	assetsFS, err = fs.Sub(web.Assets, "static")
+	if err != nil {
+		log.Fatalf("嵌入静态资源加载失败: %v", err)
+	}
+	mux.Handle("/assets/", http.FileServer(http.FS(assetsFS)))
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			r.ParseForm()
-			username := r.FormValue("username")
-			password := r.FormValue("password")
-
-			if authStore.Authenticate(username, password) {
-				// 轮转：销毁旧会话，创建新会话
-				authStore.UpdateLastLogin(username)
-				sid := authStore.CreateSession(username, 24*time.Hour)
-
-				http.SetCookie(w, &http.Cookie{
-					Name:     auth.SessionCookie,
-					Value:    sid,
-					Path:     "/",
-					HttpOnly: true,
-					SameSite: http.SameSiteLaxMode,
-					MaxAge:   86400,
-				})
-				http.Redirect(w, r, "/", http.StatusFound)
-				return
-			}
-			http.Redirect(w, r, "/login?error=auth", http.StatusFound)
+		serveSPA(w, r)
+	})
+	mux.HandleFunc("/portal/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, 405, map[string]string{"error": "Method not allowed"})
 			return
 		}
-		serveHTMLFile(w, loginPath)
+		r.ParseForm()
+		username := r.FormValue("username")
+		password := r.FormValue("password")
+		if !authStore.Authenticate(username, password) {
+			writeJSON(w, 401, map[string]string{"error": "用户名或密码错误"})
+			return
+		}
+		authStore.UpdateLastLogin(username)
+		sid := authStore.CreateSession(username, 24*time.Hour)
+		http.SetCookie(w, &http.Cookie{
+			Name:     auth.SessionCookie,
+			Value:    sid,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   86400,
+		})
+		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/portal/health", func(w http.ResponseWriter, r *http.Request) {
 		svcs := serviceStore.GetAll()
 		online := 0
 		for _, s := range svcs {
@@ -178,23 +179,22 @@ func main() {
 		})
 	})
 
-	// /api/ 代理转发：浏览器 XHR/fetch 发到 /api/xxx，转发到下游服务
-	// 类似 Nginx 的 location /api/ { proxy_pass http://localhost:5000/; }
-	// Go ServeMux longest-prefix 优先：/api/health 等具体路由先匹配
-	mux.Handle("/api/", proxy.Handler("5000"))
+	// /api/ 代理转发：所有 /api/xxx 请求转发到下游服务
+	// Referer 自动路由到对应服务（类似 Nginx map $http_referer）
+	mux.Handle("/api/", proxy.Handler("20180"))
 
-	// 需要认证
+	// 需要认证的路由
 	mux.Handle("/", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
-			serveHTMLFile(w, dashboardPath)
+			serveSPA(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		serveSPA(w, r)
 	})))
-	mux.Handle("/api/services", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/portal/services", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"services": serviceStore.GetAll()})
 	})))
-	mux.Handle("/api/probe", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/portal/probe", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, 405, map[string]string{"error": "仅支持 POST 方法"})
 			return
@@ -202,36 +202,54 @@ func main() {
 		go probeEngine.ProbeAll()
 		writeJSON(w, 200, map[string]string{"status": "扫描已触发"})
 	})))
-	mux.Handle("/proxy/", authMw(proxy.Handler("5000")))
+	mux.Handle("/proxy/20128/", authMw(proxy.Handler("20128")))
+	mux.Handle("/proxy/20180/", authMw(proxy.Handler("20180")))
+
+	// Next.js SPA 动态加载的 /_next/ 资源通过代理转发到 9Router
+	// 无 authMw：这些请求来自已认证 9Router 的浏览器页面
+	mux.Handle("/_next/", proxy.Handler("20128"))
+
+	// Next.js SPA 侧边栏 RSC 导航也通过代理转发到 9Router
+	mux.Handle("/dashboard/", proxy.Handler("20128"))
+
+	// 9Router SPA 静态资源路由
+	mux.Handle("/manifest.webmanifest", proxy.Handler("20128"))
+	mux.Handle("/favicon.svg", proxy.Handler("20128"))
+	mux.Handle("/favicon.ico", proxy.Handler("20128"))
+	mux.Handle("/icons/", proxy.Handler("20128"))
 	mux.Handle("/logout", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(auth.SessionCookie); err == nil {
 			authStore.DestroySession(c.Value)
 		}
 		http.Redirect(w, r, "/login", http.StatusFound)
 	})))
-	mux.HandleFunc("/api/me", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/portal/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(auth.SessionCookie)
 		if err != nil {
-			writeJSON(w, 401, map[string]string{"error": "未登录"})
+			writeJSON(w, 200, map[string]bool{"authenticated": false})
 			return
 		}
-		username, valid := authStore.ValidateSession(cookie.Value)
-		if !valid {
-			writeJSON(w, 401, map[string]string{"error": "会话无效"})
-			return
-		}
-		writeJSON(w, 200, map[string]string{"username": username})
+		_, valid := authStore.ValidateSession(cookie.Value)
+		writeJSON(w, 200, map[string]bool{"authenticated": valid})
 	})
-
-	// CSP middleware
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' http://localhost:* https://localhost:*")
-		mux.ServeHTTP(w, r)
+	mux.HandleFunc("/portal/csrf", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"token": ""})
+	})
+	mux.HandleFunc("/portal/logout", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(auth.SessionCookie); err == nil {
+			authStore.DestroySession(c.Value)
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	srv := &http.Server{Addr: addr, Handler: handler}
+
+	cspHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* https://localhost:*")
+		mux.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Addr: addr, Handler: cspHandler}
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -249,10 +267,10 @@ func main() {
 	}
 }
 
-func serveHTMLFile(w http.ResponseWriter, path string) {
-	data, err := os.ReadFile(path)
+func serveSPA(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(assetsFS, "index.html")
 	if err != nil {
-		http.Error(w, "文件未找到", 500)
+		http.Error(w, "前端未构建，请运行: cd frontend && npm run build", 500)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

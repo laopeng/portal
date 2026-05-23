@@ -90,7 +90,7 @@ func Handler(defaultPort string) http.HandlerFunc {
 			return
 		}
 
-		port, subPath := resolveTarget(r.URL.Path, defaultPort)
+		port, subPath := resolveTarget(r.URL.Path, r.Header.Get("Referer"), defaultPort)
 		if port == "" {
 			http.NotFound(w, r)
 			return
@@ -99,26 +99,76 @@ func Handler(defaultPort string) http.HandlerFunc {
 		proxyPrefix := "/proxy/" + port + "/"
 
 		target, _ := url.Parse("http://localhost:" + port)
+
+		director := func(req *http.Request) {
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.URL.Path = subPath
+			req.URL.RawQuery = r.URL.RawQuery
+			req.Host = target.Host
+			req.Header.Set("X-Forwarded-For", r.RemoteAddr)
+			if fwd := r.Header.Get("X-Real-IP"); fwd != "" {
+				req.Header.Set("X-Real-IP", fwd)
+			}
+			req.Header.Set("X-Forwarded-Host", r.Host)
+			scheme := "http"
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			req.Header.Set("X-Forwarded-Proto", scheme)
+			req.Header.Del("If-None-Match")
+			req.Header.Del("If-Modified-Since")
+		}
+
+		errHandler := func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("proxy error (port %s): %v", port, err)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprintf(w, "<!DOCTYPE html><html><head><style>body{font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh}div{text-align:center}h1{font-size:20px}p{color:#8b949e}</style></head><body><div><h1>Service Unreachable</h1><p>Port %s is not responding</p></div></body></html>", port)
+		}
+
+		// Nginx-style pass-through for Next.js (port 20128):
+		// Use raw http.Client + io.Copy to avoid any Go HTTP layer manipulation.
+		// httputil.ReverseProxy, even with DisableCompression + no ModifyResponse,
+		// may alter chunk boundaries → React hydration #418.
+		if port == "20128" {
+			upstreamURL := "http://localhost:" + port + subPath
+			if r.URL.RawQuery != "" {
+				upstreamURL += "?" + r.URL.RawQuery
+			}
+			upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
+			if err != nil {
+				http.Error(w, "Bad gateway", http.StatusBadGateway)
+				return
+			}
+			copyHeaders(upstreamReq.Header, r.Header)
+			upstreamReq.Header.Set("X-Forwarded-For", r.RemoteAddr)
+			upstreamReq.Header.Set("X-Forwarded-Host", r.Host)
+			upstreamReq.Header.Del("If-None-Match")
+			upstreamReq.Header.Del("If-Modified-Since")
+
+			client := &http.Client{
+				Transport: &http.Transport{
+					DisableCompression: true,
+				},
+			}
+			resp, err := client.Do(upstreamReq)
+			if err != nil {
+				log.Printf("proxy error (port %s): %v", port, err)
+				http.Error(w, "Bad gateway", http.StatusBadGateway)
+				return
+			}
+			defer resp.Body.Close()
+
+			w.Header().Del("Content-Security-Policy")
+			copyHeaders(w.Header(), resp.Header)
+			w.WriteHeader(resp.StatusCode)
+			io.Copy(w, resp.Body)
+			return
+		}
+
 		proxy := &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				req.URL.Path = subPath
-				req.URL.RawQuery = r.URL.RawQuery
-				req.Host = target.Host
-				req.Header.Set("X-Forwarded-For", r.RemoteAddr)
-				if fwd := r.Header.Get("X-Real-IP"); fwd != "" {
-					req.Header.Set("X-Real-IP", fwd)
-				}
-				req.Header.Set("X-Forwarded-Host", r.Host)
-				scheme := "http"
-				if r.TLS != nil {
-					scheme = "https"
-				}
-				req.Header.Set("X-Forwarded-Proto", scheme)
-				req.Header.Del("If-None-Match")
-				req.Header.Del("If-Modified-Since")
-			},
+			Director: director,
 			ModifyResponse: func(resp *http.Response) error {
 				origin := r.Header.Get("Origin")
 				if origin != "" {
@@ -126,28 +176,31 @@ func Handler(defaultPort string) http.HandlerFunc {
 					resp.Header.Set("Access-Control-Allow-Credentials", "true")
 				}
 
-				// Rewrite Location header (Nginx proxy_redirect)
 				if loc := resp.Header.Get("Location"); loc != "" {
 					resp.Header.Set("Location", rewriteLocation(loc, proxyPrefix))
 				}
 
-				// Rewrite HTML/CSS response bodies for SPA path compatibility
 				ct := resp.Header.Get("Content-Type")
-				if strings.Contains(ct, "text/html") || strings.Contains(ct, "text/css") {
+				if strings.Contains(ct, "text/css") {
 					orig := resp.Body
 					body, err := io.ReadAll(orig)
 					if err != nil {
 						return nil
 					}
 					orig.Close()
-
-					if strings.Contains(ct, "text/css") {
-						body = rewriteCSS(body, []byte(proxyPrefix))
+					body = rewriteCSS(body, []byte(proxyPrefix))
+					resp.Body = io.NopCloser(bytes.NewReader(body))
+					resp.ContentLength = int64(len(body))
+					resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+				}
+				if strings.Contains(ct, "text/html") {
+					orig := resp.Body
+					body, err := io.ReadAll(orig)
+					if err != nil {
+						return nil
 					}
-					if strings.Contains(ct, "text/html") {
-						body = rewriteHTML(body, []byte(proxyPrefix))
-					}
-
+					orig.Close()
+					body = rewriteHTML(body, []byte(proxyPrefix))
 					resp.Body = io.NopCloser(bytes.NewReader(body))
 					resp.ContentLength = int64(len(body))
 					resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
@@ -158,67 +211,57 @@ func Handler(defaultPort string) http.HandlerFunc {
 				}
 				return nil
 			},
-			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-				log.Printf("proxy error (port %s): %v", port, err)
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusBadGateway)
-				fmt.Fprintf(w, "<!DOCTYPE html><html><head><style>body{font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh}div{text-align:center}h1{font-size:20px}p{color:#8b949e}</style></head><body><div><h1>Service Unreachable</h1><p>Port %s is not responding</p></div></body></html>", port)
-			},
-			FlushInterval: 100 * 1000 * 1000,
+			ErrorHandler:   errHandler,
+			FlushInterval:  100 * 1000 * 1000,
 		}
+		w.Header().Del("Content-Security-Policy")
 		proxy.ServeHTTP(w, r)
 	}
 }
 
 // resolveTarget determines the target port and sub-path from a request URL.
-// Two patterns:
-//   - "/proxy/PORT/xxx" → port=P PORT, subPath=/xxx  (browser navigation via proxy prefix)
-//   - "/api/xxx"         → port=defaultPort, subPath=/xxx  (browser XHR via origin)
-//   - other              → no match
-func resolveTarget(requestPath, defaultPort string) (port, subPath string) {
+// Nginx-style routing with Referer fallback (equivalent to Nginx map $http_referer).
+//   - "/proxy/PORT/xxx" → port=PORT, subPath=/xxx
+//   - other with Referer "/proxy/PORT/..." → port=PORT, subPath=as-is
+//   - other → port=defaultPort, subPath=as-is
+func resolveTarget(requestPath, referer, defaultPort string) (port, subPath string) {
 	if port, sp := stripProxyPrefix(requestPath); port != "" {
 		return port, sp
 	}
-	if strings.HasPrefix(requestPath, "/api/") {
-		return defaultPort, requestPath
+	if port := extractPortFromReferer(referer); port != "" {
+		return port, requestPath
 	}
-	return "", requestPath
+	return defaultPort, requestPath
+}
+
+// extractPortFromReferer extracts the port from /proxy/PORT/ pattern in the referer URL.
+// Also detects /dashboard/ → 20128 (9Router SPA).
+func extractPortFromReferer(referer string) string {
+	idx := strings.Index(referer, "/proxy/")
+	if idx >= 0 {
+		rest := referer[idx+len("/proxy/"):]
+		slash := strings.Index(rest, "/")
+		if slash > 0 {
+			return rest[:slash]
+		}
+	}
+	u, err := url.Parse(referer)
+	if err == nil {
+		p := u.Path
+		if p == "/dashboard" || strings.HasPrefix(p, "/dashboard/") {
+			return "20128"
+		}
+	}
+	return ""
 }
 
 // rewriteHTML rewrites absolute paths in HTML to include the proxy prefix.
-// Nginx-style: inject <base> tag for relative URL resolution, then rewrite
-// src/href attributes with root-relative paths. Single-pass prevents double-wrapping.
+// Only rewrites src/href attribute values — does NOT inject new elements (<base>/<script>)
+// to avoid React hydration mismatch (#418).
 func rewriteHTML(body, proxyPrefix []byte) []byte {
 	prefix := string(proxyPrefix)
 
-	// Step 1: Inject or update <base> tag for relative URL resolution.
-	baseRe := regexp.MustCompile(`(?i)<base\s[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))`)
-	if baseRe.Match(body) {
-		body = baseRe.ReplaceAllFunc(body, func(match []byte) []byte {
-			subs := baseRe.FindSubmatch(match)
-			var rawPath string
-			switch {
-			case len(subs[1]) > 0:
-				rawPath = string(subs[1])
-			case len(subs[2]) > 0:
-				rawPath = string(subs[2])
-			default:
-				rawPath = strings.TrimSuffix(string(subs[3]), ">")
-			}
-			cleanPath := strings.TrimPrefix(rawPath, "/")
-			var newHref string
-			if cleanPath == "" {
-				newHref = prefix
-			} else {
-				newHref = prefix + cleanPath
-			}
-			return []byte(`<base href="` + newHref + `">`)
-		})
-	} else {
-		body = bytes.Replace(body, []byte("<head>"), []byte("<head><base href=\""+prefix+"\">"), 1)
-	}
-
-	// Step 2: Rewrite src="/..." and href="/..." paths. Skip non-absolute paths
+	// Step 1: Rewrite src="/..." and href="/..." paths. Skip non-absolute paths
 	// and paths already carrying the proxy prefix (single-pass, no dedup needed).
 	re := regexp.MustCompile(`(?i)\b(src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))`)
 	body = re.ReplaceAllFunc(body, func(match []byte) []byte {
@@ -252,4 +295,12 @@ func rewriteHTML(body, proxyPrefix []byte) []byte {
 		return []byte(attr + "=" + newPath + ">")
 	})
 	return body
+}
+
+func copyHeaders(dst, src http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
 }

@@ -206,3 +206,34 @@ func (s *ServiceStore) CleanupZombies(ttl time.Duration) {
 		s.dirty = true
 	}
 }
+
+// CleanupNonConfigured 清理不在配置端口列表中的服务。
+// 手动添加的服务（Manual=true）永久保留。
+func (s *ServiceStore) CleanupNonConfigured(configuredPorts map[string]bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := s.services[:0]
+	removed := false
+
+	for _, svc := range s.services {
+		// 手动添加的服务永久保留
+		if svc.Manual {
+			filtered = append(filtered, svc)
+			continue
+		}
+		// 端口在配置中 -> 保留
+		portStr := fmt.Sprintf("%d", svc.Port)
+		if configuredPorts[portStr] {
+			filtered = append(filtered, svc)
+			continue
+		}
+		// 端口不在配置中 -> 清理
+		removed = true
+	}
+
+	if removed {
+		s.services = filtered
+		s.dirty = true
+	}
+}

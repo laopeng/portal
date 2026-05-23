@@ -55,7 +55,7 @@ func Default() Config {
 		ProbeTimeout:   5,
 		MaxConcurrency: 20,
 		PortHints: map[string]PortHint{
-			"5000":  {Name: "资金管理系统", Icon: "💰", Desc: "个人/企业资金收支管理", Cat: "data"},
+			"20180": {Name: "基金管理系统", Icon: "💼", Desc: "基金投资组合管理", Cat: "data"},
 			"8787":  {Name: "Hermes Web", Icon: "📡", Desc: "AI 网关管理平台，管理 API 路由与密钥", Cat: "ai"},
 			"20128": {Name: "9Router", Icon: "🔀", Desc: "AI 基础设施管理，统一管理所有 AI 供应商端点", Cat: "ai"},
 		},

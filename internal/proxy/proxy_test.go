@@ -39,45 +39,14 @@ func TestRewriteHTML_BasicRewrites(t *testing.T) {
 	if !strings.Contains(result, `href="/proxy/5000/dashboard"`) {
 		t.Errorf("href not rewritten: %s", result)
 	}
-	if !strings.Contains(result, `<base href="/proxy/5000/">`) {
-		t.Errorf("base tag not injected: %s", result)
-	}
 	// Verify <title> preserved
 	if !strings.Contains(result, "<title>Fund</title>") {
 		t.Errorf("title tag was destroyed: %s", result)
 	}
 }
 
-func TestRewriteHTML_BaseInjection(t *testing.T) {
-	prefix := "/proxy/5000/"
-
-	t.Run("no existing base", func(t *testing.T) {
-		html := `<html><head></head><body></body></html>`
-		result := string(rewriteHTML([]byte(html), []byte(prefix)))
-		if !strings.Contains(result, `<base href="/proxy/5000/">`) {
-			t.Errorf("base tag not injected: %s", result)
-		}
-	})
-
-	t.Run("existing base updated", func(t *testing.T) {
-		html := `<html><head><base href="/"></head><body></body></html>`
-		result := string(rewriteHTML([]byte(html), []byte(prefix)))
-		if strings.Contains(result, `<base href="/">`) {
-			t.Errorf("original base not replaced: %s", result)
-		}
-		if !strings.Contains(result, `<base href="/proxy/5000/">`) {
-			t.Errorf("base not updated to proxy prefix: %s", result)
-		}
-	})
-
-	t.Run("single quoted base", func(t *testing.T) {
-		html := `<html><head><base href='/app/'><title>T</title></head><body></body></html>`
-		result := string(rewriteHTML([]byte(html), []byte(prefix)))
-		if !strings.Contains(result, `href="/proxy/5000/app/"`) {
-			t.Errorf("single-quoted base not updated: %s", result)
-		}
-	})
-}
+// TestRewriteHTML_BaseInjection removed: <base> tag injection was removed to avoid
+// React hydration mismatch (#418). Only src/href attribute rewriting is performed now.
 
 func TestRewriteHTML_DoublePrefixProtection(t *testing.T) {
 	prefix := "/proxy/5000/"
